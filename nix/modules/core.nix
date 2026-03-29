@@ -15,7 +15,6 @@
     fzf
     gh
     git
-    home-manager
     htop
     jq
     nix-direnv
