@@ -1,0 +1,2 @@
+# Launch bash as a login shell
+command = bash -l

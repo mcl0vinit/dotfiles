@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+target_dir="${DOTFILES_DIR:-$HOME/.dotfiles}"
+apply=0
+timestamp="$(date +%Y%m%d-%H%M%S)"
+backup_root="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-bootstrap-backups"
+backup_dir="$backup_root/$timestamp"
+backup_any=0
+hm_args=()
+
+usage() {
+  cat <<'EOF'
+usage: ./bin/bootstrap [--apply] [-- <home-manager switch args>]
+
+Default behavior:
+  - link this repo at ~/.dotfiles
+  - do not change the active Home Manager generation
+
+Use --apply to:
+  - back up current managed files
+  - write a rollback script
+  - run hm-switch with the provided args
+EOF
+}
+
+write_rollback_script() {
+  local rollback_file="$backup_dir/rollback.sh"
+  local profiles_dir="$HOME/.local/state/nix/profiles"
+  local previous_profile previous_home_manager previous_dotfiles
+
+  previous_profile="$(readlink "$profiles_dir/profile" 2>/dev/null || true)"
+  previous_home_manager="$(readlink "$profiles_dir/home-manager" 2>/dev/null || true)"
+  previous_dotfiles="$(readlink "$target_dir" 2>/dev/null || true)"
+
+  mkdir -p "$backup_dir"
+
+  cat > "$rollback_file" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+profiles_dir="$profiles_dir"
+
+if [ -n '$previous_profile' ]; then
+  ln -sfn '$previous_profile' "\$profiles_dir/profile"
+fi
+
+if [ -n '$previous_home_manager' ]; then
+  ln -sfn '$previous_home_manager' "\$profiles_dir/home-manager"
+fi
+
+if [ -n '$previous_dotfiles' ]; then
+  ln -sfn '$previous_dotfiles' '$target_dir'
+fi
+
+if [ -x "\$profiles_dir/home-manager/activate" ]; then
+  exec "\$profiles_dir/home-manager/activate"
+fi
+
+printf 'Restored profile symlinks, but no Home Manager activation script was found.\n' >&2
+exit 1
+EOF
+
+  chmod +x "$rollback_file"
+}
+
+backup_path() {
+  local src="$1"
+  local rel dest
+
+  if [ ! -e "$src" ] && [ ! -L "$src" ]; then
+    return 0
+  fi
+
+  rel="${src#"$HOME"/}"
+  dest="$backup_dir/$rel"
+  mkdir -p "$(dirname "$dest")"
+  cp -RP "$src" "$dest"
+  backup_any=1
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply)
+      apply=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      hm_args=("$@")
+      break
+      ;;
+    *)
+      hm_args=("$@")
+      break
+      ;;
+  esac
+done
+
+managed_paths=(
+  "$HOME/.bashrc"
+  "$HOME/.bash_profile"
+  "$HOME/.zshrc"
+  "$HOME/.zshenv"
+  "$HOME/.config/direnv/direnvrc"
+  "$HOME/.config/gh/config.yml"
+  "$HOME/.config/git/config"
+  "$HOME/.config/ghostty/config"
+  "$HOME/.config/htop/htoprc"
+  "$HOME/.config/nix/nix.conf"
+  "$HOME/.config/nvim"
+  "$HOME/.config/tmux"
+  "$HOME/.config/zed/settings.json"
+  "$HOME/.codex/rules/default.rules"
+  "$HOME/.ssh/config"
+)
+
+mkdir -p "$(dirname "$target_dir")"
+ln -sfn "$repo_dir" "$target_dir"
+
+if [ "$apply" -ne 1 ]; then
+  cat <<EOF
+Linked dotfiles repo at $target_dir
+
+No config was applied.
+When you are ready, run:
+  $target_dir/bin/bootstrap --apply
+
+If you want to pass args through to Home Manager, use:
+  $target_dir/bin/bootstrap --apply -- <args>
+EOF
+  exit 0
+fi
+
+for path in "${managed_paths[@]}"; do
+  backup_path "$path"
+done
+
+write_rollback_script
+
+if [ "$backup_any" -eq 1 ]; then
+  printf 'Backed up existing config to %s\n' "$backup_dir"
+fi
+
+printf 'Rollback script: %s\n' "$backup_dir/rollback.sh"
+
+exec "$target_dir/bin/hm-switch" -b "pre-dotfiles-$timestamp" "${hm_args[@]}"
