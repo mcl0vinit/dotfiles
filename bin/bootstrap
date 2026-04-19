@@ -149,4 +149,8 @@ fi
 
 printf 'Rollback script: %s\n' "$backup_dir/rollback.sh"
 
-exec "$target_dir/bin/hm-switch" -b "pre-dotfiles-$timestamp" "${hm_args[@]}"
+if [ "${#hm_args[@]}" -gt 0 ]; then
+  exec "$target_dir/bin/hm-switch" -b "pre-dotfiles-$timestamp" "${hm_args[@]}"
+fi
+
+exec "$target_dir/bin/hm-switch" -b "pre-dotfiles-$timestamp"
